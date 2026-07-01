@@ -1,0 +1,41 @@
+{
+  "name": "webuplink",
+  "version": "0.1.0",
+  "description": "Official TypeScript SDK for WebUplink — the whole web, as function calls.",
+  "license": "MIT",
+  "keywords": ["webuplink", "ai-agent", "browser", "web-automation", "sdk", "mcp"],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/webuplink-dev/webuplink-node.git"
+  },
+  "homepage": "https://webuplink.ai",
+  "bugs": {
+    "url": "https://github.com/webuplink-dev/webuplink-node/issues"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsup": "^8.5.0",
+    "typescript": "~5.8.2",
+    "vitest": "^3.2.1"
+  }
+}
