@@ -8,8 +8,9 @@
  * - Does NOT retry on 4xx errors
  * - Respects maxRetries and retry: false configuration
  *
- * Note: The server collapses all 5xx errors to 500 INTERNAL_ERROR
- * but preserves retry_after for transient infrastructure issues.
+ * Note: The server sends retry_after on transient 5xx errors
+ * (BROWSER_ERROR, AI_PROCESSING_ERROR, capacity 503s, retryable
+ * INTERNAL_ERRORs) and omits it on terminal ones (SITE_BLOCKED).
  * The SDK keys on retry_after presence — except 429 (RATE_LIMITED /
  * QUOTA_EXCEEDED), which is never auto-retried even with retry_after.
  */
@@ -85,6 +86,60 @@ describe('Retry logic', () => {
     const result = await client.browse('https://example.com');
     expect(result.session_id).toBe('s1');
     expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries on 503 BROWSER_ERROR with retry_after for observe-only requests', async () => {
+    let callCount = 0;
+    const fetchFn = vi.fn(async () => {
+      callCount++;
+      if (callCount < 2) {
+        return createResponseMock(
+          { error: 'BROWSER_ERROR', message: 'Browser infrastructure is temporarily unavailable. Please retry.', request_id: 'be1', retry_after: 0.01 },
+          503,
+          { 'x-request-id': 'be1' },
+        );
+      }
+      return createResponseMock(
+        { session_id: 's1', url: 'u', title: 't', summary: 's', tools: [] },
+        200,
+      );
+    });
+
+    const client = new WebUplink({
+      apiKey: 'key',
+      baseUrl: 'https://api.test.dev',
+      fetch: fetchFn as unknown as typeof fetch,
+      maxRetries: 2,
+    });
+
+    const result = await client.browse('https://example.com');
+    expect(result.session_id).toBe('s1');
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT retry 502 SITE_BLOCKED (no retry_after — a retry hits the same wall)', async () => {
+    const fetchFn = vi.fn(async () =>
+      createResponseMock(
+        { error: 'SITE_BLOCKED', message: 'The site presented a bot-verification challenge instead of the page.', request_id: 'sb1' },
+        502,
+        { 'x-request-id': 'sb1' },
+      ),
+    );
+
+    const client = new WebUplink({
+      apiKey: 'key',
+      baseUrl: 'https://api.test.dev',
+      fetch: fetchFn as unknown as typeof fetch,
+      maxRetries: 3,
+    });
+
+    const err = await client.browse('https://example.com').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WebUplinkError);
+    expect((err as WebUplinkError).code).toBe('SITE_BLOCKED');
+    expect((err as WebUplinkError).statusCode).toBe(502);
+    expect((err as WebUplinkError).retryable).toBe(false);
+    expect((err as WebUplinkError).retryAfter).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT retry when tools are involved (non-idempotent)', async () => {

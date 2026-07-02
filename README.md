@@ -44,10 +44,32 @@ await client.closeSession(page.session_id);
 
 ## What you can build
 
-- **AI agents that act on the web** — browse any site, get back typed tool definitions, execute actions
+- **AI agents that act on the web** — browse any site, get back named, callable tool definitions, execute actions
 - **No selectors, no scraping** — WebUplink understands pages and generates callable tools automatically
 - **Multi-step workflows** — sessions persist across navigations, so your agent can search → filter → select → checkout
 - **Any website, zero configuration** — works on sites you've never seen before
+
+## Error handling
+
+Every non-2xx response throws a typed `WebUplinkError` carrying the machine-readable `code`, HTTP `statusCode`, and `requestId` (cite it in support tickets):
+
+```typescript
+import { WebUplink, WebUplinkError } from 'webuplink';
+
+try {
+  const page = await client.browse('https://example.com');
+} catch (err) {
+  if (err instanceof WebUplinkError) {
+    console.log(err.code);       // e.g. 'QUOTA_EXCEEDED', 'SITE_BLOCKED'
+    console.log(err.statusCode); // e.g. 429, 502
+    console.log(err.requestId);  // 'req-abc-123'
+  }
+}
+```
+
+Transient errors that carry `retry_after` (e.g. `BROWSER_ERROR`, `AI_PROCESSING_ERROR`) are retried automatically for observe-only requests. `SITE_BLOCKED` — the site served a bot-verification challenge or access-denied page; the request is **not billed** — carries no `retry_after` and is never auto-retried. Tool executions are never auto-retried (non-idempotent).
+
+Full error reference at **[webuplink.ai/docs/errors](https://webuplink.ai/docs/errors)**.
 
 ## Documentation
 

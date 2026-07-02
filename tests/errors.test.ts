@@ -5,6 +5,7 @@
  * error subclasses.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   WebUplinkError,
@@ -12,6 +13,7 @@ import {
   RateLimitError,
   APIConnectionError,
 } from '../src/errors.js';
+import type { ErrorCode } from '../src/api-types.js';
 
 describe('Error hierarchy', () => {
   const baseOptions = {
@@ -108,6 +110,58 @@ describe('Error hierarchy', () => {
       const original = new Error('ECONNREFUSED');
       const err = new APIConnectionError('Connection failed', { cause: original });
       expect(err.cause).toBe(original);
+    });
+  });
+
+  describe('ErrorCode union', () => {
+    it('covers every code the API emits (lockstep with the server taxonomy)', () => {
+      // Type-level pin: adding a wire code without updating the union
+      // makes this array fail to compile.
+      const codes: ErrorCode[] = [
+        'UNAUTHORIZED',
+        'INVALID_REQUEST',
+        'VALIDATION_ERROR',
+        'DOMAIN_BLOCKED',
+        'SESSION_NOT_FOUND',
+        'SESSION_BUSY',
+        'SESSION_EXPIRED',
+        'PLAN_RESTRICTED',
+        'QUOTA_EXCEEDED',
+        'RATE_LIMITED',
+        'CONCURRENCY_EXCEEDED',
+        'CONCURRENCY_UNAVAILABLE',
+        'FREE_TIER_DEGRADED',
+        'BROWSER_ERROR',
+        'AI_PROCESSING_ERROR',
+        'SITE_BLOCKED',
+        'INTERNAL_ERROR',
+      ];
+
+      // Runtime pin against the SOURCE (like the Python twin): parse the
+      // union out of api-types.ts so a re-added dead code (or a member this
+      // list forgot) actually fails — a literal-vs-literal assertion cannot.
+      const source = readFileSync(new URL('../src/api-types.ts', import.meta.url), 'utf8');
+      const union = /export type ErrorCode =([\s\S]*?);/.exec(source);
+      expect(union).not.toBeNull();
+      const publishedCodes = [...union![1]!.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]!);
+
+      expect([...publishedCodes].sort()).toEqual([...codes].sort());
+      // PAGE_ANALYSIS_FAILED was removed — never emitted by the API.
+      expect(publishedCodes).not.toContain('PAGE_ANALYSIS_FAILED');
+      expect(publishedCodes).toContain('SITE_BLOCKED');
+    });
+
+    it('preserves the code on WebUplinkError for engine errors', () => {
+      const err = new WebUplinkError({
+        code: 'SITE_BLOCKED',
+        message: 'The site presented a bot-verification challenge instead of the page.',
+        statusCode: 502,
+        requestId: 'req-sb',
+        retryable: false,
+      });
+      expect(err.code).toBe('SITE_BLOCKED');
+      expect(err.retryable).toBe(false);
+      expect(err.retryAfter).toBeUndefined();
     });
   });
 });

@@ -16,7 +16,7 @@ import type { WebUplinkOptions, BrowseOptions, UsageInfo } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.webuplink.ai';
 const ENV_API_KEY = 'WEBUPLINK_API_KEY';
-const SDK_VERSION = '0.1.0';
+const SDK_VERSION = '0.1.1';
 const USER_AGENT = `webuplink-node/${SDK_VERSION}`;
 const DEFAULT_RETRY_DELAY_S = 5;
 
@@ -236,8 +236,9 @@ export class WebUplink {
       };
 
       // Determine retryability from the server's retry_after field.
-      // The server collapses all 5xx errors to 500 INTERNAL_ERROR but
-      // preserves retry_after for transient infrastructure issues.
+      // Transient failures (BROWSER_ERROR, AI_PROCESSING_ERROR, capacity
+      // 503s, retryable INTERNAL_ERRORs) carry retry_after; terminal ones
+      // (SITE_BLOCKED) don't — so retry_after presence IS the signal.
       // 429s (RATE_LIMITED / QUOTA_EXCEEDED) also carry retry_after,
       // but auto-retrying a throttle just amplifies load — never retry them.
       const retryable =

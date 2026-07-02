@@ -1,6 +1,6 @@
 {
   "name": "webuplink",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official TypeScript SDK for WebUplink — the whole web, as function calls.",
   "license": "MIT",
   "keywords": ["webuplink", "ai-agent", "browser", "web-automation", "sdk", "mcp"],
