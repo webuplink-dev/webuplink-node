@@ -254,6 +254,21 @@ describe('WebUplink client', () => {
       }
     });
 
+    it('uses the contract request_id when the response header is absent', async () => {
+      const fetch = mockFetch(
+        { error: 'SESSION_NOT_FOUND', message: 'Session not found', request_id: 'req-body' },
+        { status: 404 },
+      );
+      const client = createClient(fetch);
+
+      try {
+        await client.browse('https://example.com');
+        expect.fail('expected an API error');
+      } catch (err) {
+        expect((err as WebUplinkError).requestId).toBe('req-body');
+      }
+    });
+
     it('throws AuthenticationError on 401', async () => {
       const fetch = mockFetch(
         { error: 'UNAUTHORIZED', message: 'Invalid API key', request_id: 'req-auth' },
@@ -289,6 +304,31 @@ describe('WebUplink client', () => {
         expect(e.statusCode).toBe(429);
         expect(e.retryAfter).toBe(30);
         expect(e.retryable).toBe(false); // 429 is never auto-retried
+      }
+    });
+
+    it('preserves usage and upgrade metadata from quota errors', async () => {
+      const usage = { actions: { used: 100, limit: 100 } };
+      const upgrade = { trial: false, plans: ['builder', 'pro'], url: '/pricing' };
+      const fetch = mockFetch(
+        {
+          error: 'QUOTA_EXCEEDED',
+          message: 'Quota exceeded',
+          request_id: 'req-quota',
+          usage,
+          upgrade,
+        },
+        { status: 429, headers: { 'x-request-id': 'req-quota' } },
+      );
+      const client = createClient(fetch);
+
+      try {
+        await client.browse('https://example.com');
+        expect.fail('expected quota error');
+      } catch (err) {
+        const e = err as RateLimitError;
+        expect(e.usage).toEqual(usage);
+        expect(e.upgrade).toEqual(upgrade);
       }
     });
 
@@ -333,7 +373,11 @@ describe('WebUplink client', () => {
       const usageBody = {
         plan: 'builder',
         actions: { used: 142, limit: 1000 },
-        period: { start: '2026-06-01T00:00:00.000Z', end: '2026-07-01T00:00:00.000Z' },
+        period: {
+          start: '2026-06-01T00:00:00.000Z',
+          end: '2026-07-01T00:00:00.000Z',
+          basis: 'billing_anniversary',
+        },
         billing: { has_subscription: true, portal_url: '/v1/billing/portal' },
       };
       const fetch = mockFetch(usageBody);
@@ -354,7 +398,11 @@ describe('WebUplink client', () => {
       const usageBody = {
         plan: 'pro',
         actions: { used: 4500, limit: 5000 },
-        period: { start: '2026-06-01T00:00:00.000Z', end: '2026-07-01T00:00:00.000Z' },
+        period: {
+          start: '2026-06-01T00:00:00.000Z',
+          end: '2026-07-01T00:00:00.000Z',
+          basis: 'billing_anniversary',
+        },
         billing: { has_subscription: true, portal_url: '/v1/billing/portal' },
       };
       const fetch = mockFetch(usageBody);
@@ -367,8 +415,28 @@ describe('WebUplink client', () => {
       expect(result.actions.limit).toBe(5000);
       expect(result.period.start).toBe('2026-06-01T00:00:00.000Z');
       expect(result.period.end).toBe('2026-07-01T00:00:00.000Z');
+      expect(result.period.basis).toBe('billing_anniversary');
       expect(result.billing.has_subscription).toBe(true);
       expect(result.billing.portal_url).toBe('/v1/billing/portal');
+    });
+
+    it('accepts trial usage with a trial-window basis', async () => {
+      const fetch = mockFetch({
+        plan: 'trial',
+        actions: { used: 10, limit: 100 },
+        period: {
+          start: '2026-06-01T00:00:00.000Z',
+          end: '2026-06-15T00:00:00.000Z',
+          basis: 'trial_window',
+        },
+        billing: { has_subscription: false, portal_url: null },
+      });
+      const client = createClient(fetch);
+
+      const result = await client.getUsage();
+
+      expect(result.plan).toBe('trial');
+      expect(result.period.basis).toBe('trial_window');
     });
 
     it('throws AuthenticationError on 401', async () => {

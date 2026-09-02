@@ -10,7 +10,12 @@
  * @module webuplink/client
  */
 
-import type { BrowseResponse, HealthResponse, UsageResponse } from './api-types.js';
+import type {
+  BrowseResponse,
+  HealthResponse,
+  QuotaUpgradeCta,
+  UsageResponse,
+} from './api-types.js';
 import { WebUplinkError, AuthenticationError, RateLimitError, APIConnectionError } from './errors.js';
 import type { WebUplinkOptions, BrowseOptions, UsageInfo } from './types.js';
 
@@ -92,7 +97,7 @@ export class WebUplink {
     const hasTools = !!(body.tool || body.tools);
 
     const response = await this.request('POST', '/v1/browse', body, {
-      retryable: !hasTools,  // Only retry observe-only requests
+      retryResponse: !hasTools,  // Only retry explicit failed responses for observe-only requests
     });
 
     const data = await response.json() as BrowseResponse;
@@ -107,7 +112,7 @@ export class WebUplink {
   /**
    * Close a browser session.
    *
-   * Sessions auto-expire after 2 minutes of inactivity, but explicit
+   * Sessions auto-expire after 5 minutes of inactivity, but explicit
    * cleanup is recommended to free resources immediately.
    *
    * @param sessionId - Session ID to close.
@@ -149,7 +154,7 @@ export class WebUplink {
     method: string,
     path: string,
     body?: unknown,
-    options?: { retryable?: boolean },
+    options?: { retryResponse?: boolean },
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
@@ -178,11 +183,14 @@ export class WebUplink {
         }
 
         // Parse error response
-        const errorData = await this.parseErrorResponse(response);
+        const errorData = await this.parseErrorResponse(
+          response,
+          options?.retryResponse !== false,
+        );
 
         // Determine if retryable
         const isRetryableError = errorData.retryable &&
-          (options?.retryable !== false) &&  // Caller says it's safe
+          (options?.retryResponse !== false) &&  // Caller says the completed response is safe to retry
           attempt < maxAttempts;
 
         if (isRetryableError) {
@@ -203,12 +211,16 @@ export class WebUplink {
         // every error thrown by the SDK is a WebUplinkError subclass.
         const connError = new APIConnectionError(
           (error as Error).message,
-          { cause: error as Error },
+          {
+            cause: error as Error,
+            retryable: ['GET', 'HEAD', 'OPTIONS', 'DELETE'].includes(method.toUpperCase()),
+          },
         );
 
-        // Network errors are safe to retry regardless of idempotency
-        // (the request never reached the server)
-        if (attempt < maxAttempts) {
+        // A transport exception does not prove the request stayed local: the
+        // peer may have received and executed it before the connection was
+        // interrupted. Only methods with idempotent HTTP semantics retry.
+        if (connError.retryable && attempt < maxAttempts) {
           lastError = connError;
           await this.sleep(1000 * attempt);  // Linear backoff
           continue;
@@ -224,15 +236,21 @@ export class WebUplink {
 
   // ── Internal: Error parsing ───────────────────────────────
 
-  private async parseErrorResponse(response: Response): Promise<WebUplinkError> {
-    const requestId = response.headers.get('x-request-id') ?? 'unknown';
+  private async parseErrorResponse(
+    response: Response,
+    retryAllowed = true,
+  ): Promise<WebUplinkError> {
+    const headerRequestId = response.headers.get('x-request-id');
 
     try {
       const data = await response.json() as {
         error?: string;
         message?: string;
+        request_id?: string;
         retry_after?: number;
         details?: unknown;
+        usage?: unknown;
+        upgrade?: QuotaUpgradeCta;
       };
 
       // Determine retryability from the server's retry_after field.
@@ -242,16 +260,21 @@ export class WebUplink {
       // 429s (RATE_LIMITED / QUOTA_EXCEEDED) also carry retry_after,
       // but auto-retrying a throttle just amplifies load — never retry them.
       const retryable =
-        response.status !== 429 && data.retry_after != null && data.retry_after > 0;
+        retryAllowed
+        && response.status !== 429
+        && data.retry_after != null
+        && data.retry_after > 0;
 
       const errorOptions = {
         code: data.error ?? 'INTERNAL_ERROR',
         message: data.message ?? response.statusText,
         statusCode: response.status,
-        requestId,
+        requestId: headerRequestId ?? data.request_id ?? 'unknown',
         retryable,
         retryAfter: data.retry_after,
         details: data.details,
+        usage: data.usage,
+        upgrade: data.upgrade,
       };
 
       return this.createErrorFromStatus(response.status, errorOptions);
@@ -261,7 +284,7 @@ export class WebUplink {
         code: 'INTERNAL_ERROR',
         message: response.statusText || `HTTP ${response.status}`,
         statusCode: response.status,
-        requestId,
+        requestId: headerRequestId ?? 'unknown',
       });
     }
   }

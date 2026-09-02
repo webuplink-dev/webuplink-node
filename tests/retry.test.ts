@@ -2,7 +2,8 @@
  * Unit tests for idempotency-aware retry logic.
  *
  * Verifies that the SDK:
- * - Retries on connection errors (fetch throws)
+ * - Does not retry ambiguous browse POST connection errors
+ * - Preserves transport retry for idempotent HTTP methods
  * - Retries when server sends retry_after for observe-only requests
  * - Does NOT retry when tools are involved (non-idempotent)
  * - Does NOT retry on 4xx errors
@@ -34,15 +35,9 @@ function createResponseMock(body: unknown, status: number, headers: Record<strin
 // ── Tests ───────────────────────────────────────────────────────
 
 describe('Retry logic', () => {
-  it('retries on connection error (fetch throws)', async () => {
-    let callCount = 0;
+  it('does NOT retry an ambiguous transport error for an observe-only browse POST', async () => {
     const fetchFn = vi.fn(async () => {
-      callCount++;
-      if (callCount < 3) throw new Error('ECONNREFUSED');
-      return createResponseMock(
-        { session_id: 's1', url: 'u', title: 't', summary: 's', tools: [] },
-        200,
-      );
+      throw new Error('connection reset after request upload');
     });
 
     const client = new WebUplink({
@@ -52,9 +47,59 @@ describe('Retry logic', () => {
       maxRetries: 3,
     });
 
-    const result = await client.browse('https://example.com');
-    expect(result.session_id).toBe('s1');
-    expect(fetchFn).toHaveBeenCalledTimes(3);
+    const promise = client.browse('https://example.com');
+    await expect(promise).rejects.toBeInstanceOf(APIConnectionError);
+    await expect(promise).rejects.toMatchObject({ retryable: false });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transport error for an idempotent health GET', async () => {
+    vi.useFakeTimers();
+    try {
+      let callCount = 0;
+      const fetchFn = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) throw new Error('ECONNREFUSED');
+        return createResponseMock({ status: 'ok', uptime: 1, active_sessions: 0 }, 200);
+      });
+      const client = new WebUplink({
+        apiKey: 'key',
+        baseUrl: 'https://api.test.dev',
+        fetch: fetchFn as unknown as typeof fetch,
+        maxRetries: 1,
+      });
+
+      const resultPromise = client.health();
+      await vi.runAllTimersAsync();
+      await expect(resultPromise).resolves.toMatchObject({ status: 'ok' });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT retry an ambiguous transport error for a tool request', async () => {
+    const fetchFn = vi.fn(async () => {
+      // A fetch rejection can happen after the server received the body.
+      throw new Error('connection reset after request upload');
+    });
+
+    const client = new WebUplink({
+      apiKey: 'key',
+      baseUrl: 'https://api.test.dev',
+      fetch: fetchFn as unknown as typeof fetch,
+      maxRetries: 3,
+    });
+
+    const promise = client.browse({
+      session_id: 's1',
+      tool: 'place_order',
+      params: { item: 'laptop' },
+    });
+    await expect(promise).rejects.toBeInstanceOf(APIConnectionError);
+    await expect(promise).rejects.toMatchObject({ retryable: false });
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('retries on 500 INTERNAL_ERROR with retry_after for observe-only requests', async () => {
@@ -159,13 +204,15 @@ describe('Retry logic', () => {
     });
 
     // tool execution — should NOT retry even with retry_after
-    await expect(client.browse({
+    const error = await client.browse({
       session_id: 's1',
       tool: 'place_order',
       params: { item: 'laptop' },
-    })).rejects.toThrow(WebUplinkError);
+    }).catch((caught: unknown) => caught);
 
     // Only 1 call — no retries
+    expect(error).toBeInstanceOf(WebUplinkError);
+    expect(error).toMatchObject({ retryable: false, retryAfter: 5 });
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 

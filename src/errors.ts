@@ -13,7 +13,7 @@
  * @module webuplink/errors
  */
 
-import type { ErrorCode } from './api-types.js';
+import type { ErrorCode, QuotaUpgradeCta } from './api-types.js';
 
 /** Error thrown by the WebUplink SDK for all API errors. */
 export class WebUplinkError extends Error {
@@ -29,6 +29,10 @@ export class WebUplinkError extends Error {
   readonly retryAfter?: number;
   /** Additional error details from the API response. */
   readonly details?: unknown;
+  /** Current usage state on quota or spend-cap errors. */
+  readonly usage?: unknown;
+  /** Machine-readable upgrade action on quota/degradation errors. */
+  readonly upgrade?: QuotaUpgradeCta;
 
   constructor(options: {
     code: string;
@@ -38,6 +42,8 @@ export class WebUplinkError extends Error {
     retryable?: boolean;
     retryAfter?: number;
     details?: unknown;
+    usage?: unknown;
+    upgrade?: QuotaUpgradeCta;
   }) {
     super(options.message);
     this.name = 'WebUplinkError';
@@ -47,6 +53,8 @@ export class WebUplinkError extends Error {
     this.retryable = options.retryable ?? false;
     this.retryAfter = options.retryAfter;
     this.details = options.details;
+    this.usage = options.usage;
+    this.upgrade = options.upgrade;
   }
 }
 
@@ -71,13 +79,13 @@ export class RateLimitError extends WebUplinkError {
 
 /** Thrown when the SDK cannot reach the API (network/transport failure). */
 export class APIConnectionError extends WebUplinkError {
-  constructor(message: string, options?: { cause?: Error }) {
+  constructor(message: string, options?: { cause?: Error; retryable?: boolean }) {
     super({
       code: 'CONNECTION_ERROR',
       message,
       statusCode: 0,
       requestId: 'unknown',
-      retryable: true,
+      retryable: options?.retryable ?? true,
     });
     this.name = 'APIConnectionError';
     this.cause = options?.cause;

@@ -67,7 +67,7 @@ try {
 }
 ```
 
-Transient errors that carry `retry_after` (e.g. `BROWSER_ERROR`, `AI_PROCESSING_ERROR`) are retried automatically for observe-only requests. `SITE_BLOCKED` — the site served a bot-verification challenge or access-denied page; the request is **not billed** — carries no `retry_after` and is never auto-retried. Tool executions are never auto-retried (non-idempotent).
+Transient error responses that carry `retry_after` (e.g. `BROWSER_ERROR`, `AI_PROCESSING_ERROR`) are retried automatically for observe-only requests. Raw transport failures for any browse `POST` are not retried and are marked `retryable: false`, because the server may already have received the request; idempotent `GET`/`DELETE` operations retain bounded transport retries. `SITE_BLOCKED` — the site served a bot-verification challenge or access-denied page; the request is **not billed** — carries no `retry_after` and is never auto-retried. Tool executions are never auto-retried (non-idempotent), and errors from tool-bearing calls expose `retryable: false` even when the server includes a diagnostic `retry_after`.
 
 Full error reference at **[webuplink.ai/docs/errors](https://webuplink.ai/docs/errors)**.
 

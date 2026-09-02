@@ -126,6 +126,7 @@ describe('Error hierarchy', () => {
         'SESSION_BUSY',
         'SESSION_EXPIRED',
         'PLAN_RESTRICTED',
+        'SPEND_CAP_EXCEEDED',
         'QUOTA_EXCEEDED',
         'RATE_LIMITED',
         'CONCURRENCY_EXCEEDED',
@@ -134,6 +135,7 @@ describe('Error hierarchy', () => {
         'BROWSER_ERROR',
         'AI_PROCESSING_ERROR',
         'SITE_BLOCKED',
+        'NAVIGATION_TIMEOUT',
         'INTERNAL_ERROR',
       ];
 
@@ -149,6 +151,7 @@ describe('Error hierarchy', () => {
       // PAGE_ANALYSIS_FAILED was removed — never emitted by the API.
       expect(publishedCodes).not.toContain('PAGE_ANALYSIS_FAILED');
       expect(publishedCodes).toContain('SITE_BLOCKED');
+      expect(publishedCodes).toContain('NAVIGATION_TIMEOUT');
     });
 
     it('preserves the code on WebUplinkError for engine errors', () => {
@@ -162,6 +165,22 @@ describe('Error hierarchy', () => {
       expect(err.code).toBe('SITE_BLOCKED');
       expect(err.retryable).toBe(false);
       expect(err.retryAfter).toBeUndefined();
+    });
+
+    it('preserves structured usage and upgrade metadata', () => {
+      const usage = { actions: { used: 100, limit: 100 } };
+      const upgrade = { trial: false, plans: ['builder', 'pro'] as const, url: '/pricing' };
+      const err = new WebUplinkError({
+        code: 'QUOTA_EXCEEDED',
+        message: 'Quota exceeded',
+        statusCode: 429,
+        requestId: 'req-quota',
+        usage,
+        upgrade: { ...upgrade, plans: [...upgrade.plans] },
+      });
+
+      expect(err.usage).toEqual(usage);
+      expect(err.upgrade).toEqual(upgrade);
     });
   });
 });
